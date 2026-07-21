@@ -3,19 +3,14 @@ package com.example.demo.service;
 import com.example.demo.models.*;
 import com.example.demo.repository.ExitJobOrderRepository;
 import com.example.demo.repository.ExitProcessJobOrderRepository;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
-import java.security.SecureRandom;
-import java.text.DecimalFormat;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
-
 @Service
+@Slf4j
 public class ExitProcessJobOrderService {
 
     @Autowired
@@ -29,15 +24,15 @@ public class ExitProcessJobOrderService {
             double total;
 
             for (int i = 0; i < exitJobOrders.getPandsToJobOrderList().size(); i++) {
-                ExitProcessJobOrder exitJobOrder = new ExitProcessJobOrder();
+                ExitProcessJobOrder exitJobOrder;
                 exitJobOrder = mappingJobOrder(exitJobOrders.getPandsToJobOrderList().get(i));
 
                 if (exitJobOrders.getPandsToJobOrderList().get(i).getUnit().equals("متر مربع")) {
-                    total = (Double.valueOf(exitJobOrders.getPandsToJobOrderList().get(i).getHeight()) * Double.valueOf(exitJobOrders.getPandsToJobOrderList().get(i).getWidth()) * Double.valueOf(exitJobOrders.getPandsToJobOrderList().get(i).getQuantity())) / 10000;
+                    total = (Double.parseDouble(exitJobOrders.getPandsToJobOrderList().get(i).getHeight()) * Double.parseDouble(exitJobOrders.getPandsToJobOrderList().get(i).getWidth()) * exitJobOrders.getPandsToJobOrderList().get(i).getQuantity()) / 10000;
                 } else if (exitJobOrders.getPandsToJobOrderList().get(i).getUnit().equals("متر طولى")) {
-                    total = (Double.valueOf(exitJobOrders.getPandsToJobOrderList().get(i).getHeight()) * Double.valueOf(exitJobOrders.getPandsToJobOrderList().get(i).getQuantity())) / 100;
+                    total = (Double.parseDouble(exitJobOrders.getPandsToJobOrderList().get(i).getHeight()) * exitJobOrders.getPandsToJobOrderList().get(i).getQuantity()) / 100;
                 } else {
-                    total = Double.valueOf(exitJobOrders.getPandsToJobOrderList().get(i).getQuantity());
+                    total = exitJobOrders.getPandsToJobOrderList().get(i).getQuantity();
                 }
 
                 exitJobOrder.setSerialNumber(exitJobOrderRepository.getLastSerialNumber());
@@ -48,7 +43,7 @@ public class ExitProcessJobOrderService {
             }
             return new ResponseEntity<>(exitJobOrders, HttpStatus.OK);
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error(e.getMessage());
             return null;
         }
 
@@ -88,9 +83,5 @@ public class ExitProcessJobOrderService {
         jobOrder.setAdditionalDescription(updatedJobOrder.getAdditionalDescription());
 
         return jobOrder;
-    }
-
-    public void deleteAll() {
-        exitProcessJobOrderRepository.deleteAll();
     }
 }

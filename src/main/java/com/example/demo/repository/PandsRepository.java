@@ -18,7 +18,7 @@ public interface PandsRepository extends JpaRepository<Pand, Long> {
     Pand findByIdAndProjectProfileId(Long pandCode,Long Id);
 
 
-//    Pand getByPandCodeAndProjectCode(String pandCode,String projectCode);
+    Pand findByPandCodeAndProjectCode(String pandCode,String projectCode);
 
     @Query(value = "SELECT raw_type FROM pand where project_profile_id = :projectCode GROUP BY raw_type", nativeQuery = true)
     List<String> getRawsPandByProjectId(@Param("projectCode") Long projectCode);

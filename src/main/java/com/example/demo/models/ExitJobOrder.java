@@ -91,4 +91,8 @@ public class ExitJobOrder {
 
     private boolean returnFlag;
 
+    private int flag;
+
+    private String message;
+
 }

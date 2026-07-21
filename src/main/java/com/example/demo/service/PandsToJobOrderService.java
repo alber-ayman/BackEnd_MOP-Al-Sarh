@@ -9,6 +9,8 @@ import com.example.demo.security.jwt.JwtUtils;
 import com.github.f4b6a3.uuid.UuidCreator;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.transaction.Transactional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.InputStreamResource;
@@ -33,6 +35,10 @@ import java.util.stream.Collectors;
 
 @Service
 public class PandsToJobOrderService {
+
+    private static final Logger logger = LoggerFactory.getLogger(PandsToJobOrderService.class);
+
+    private static final int FLAG_ERROR = 1;
 
     @Autowired
     private ChangeHistoryLog changeHistoryLog;
@@ -196,36 +202,169 @@ public class PandsToJobOrderService {
         return pandsToJobOrder;
     }
 
+    @Transactional
+    public ResponseEntity<PandsToJobOrder> updateJobOrder(Long id, PandsToJobOrder updatedJobOrder, HttpServletRequest request) {
 
-    public ResponseEntity<PandsToJobOrder> updateJobOrder(Long id, PandsToJobOrder updatedJobOrder, int flag, HttpServletRequest request) {
+        PandsToJobOrder pandsToJobOrder = pandsToJobOrderRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("WorkOrder Not Found for ID: " + id));
 
-        try {
-            PandsToJobOrder jobOrder = pandsToJobOrderRepository.findById(id)
-                    .orElseThrow(() -> new ResourceNotFoundException("rawType Not Found for ID: " + id));
+        JobOrder fatherJobOrder = jobOrderService.getByJobOrder(pandsToJobOrder.getJobOrderId());
 
-            List<ExitJobOrder> exitJobOrders = exitJobOrderRepository.getByJobOrderId(jobOrder.getJobOrderId());
+//        if (fatherJobOrder.isApproved()) {
+//            return errorResponse(updatedJobOrder, "cannot add/edit on approved work order", HttpStatus.CONFLICT);
+//        }
+
+        List<ExitJobOrder> exitJobOrders = exitJobOrderRepository.getByJobOrderId(pandsToJobOrder.getJobOrderId());
             if (!exitJobOrders.isEmpty()) {
-                jobOrder.setFlag(1);
-                jobOrder.setMessage(" غير مسموح بالتعديل .. تم صرف أذونات لأمر الشغل " + jobOrder.getJobOrderId());
-                return new ResponseEntity<>(jobOrder, HttpStatus.BAD_REQUEST);
+                pandsToJobOrder.setFlag(1);
+                pandsToJobOrder.setMessage(" غير مسموح بالتعديل .. تم صرف أذونات لأمر الشغل " + pandsToJobOrder.getJobOrderId());
+                return new ResponseEntity<>(pandsToJobOrder, HttpStatus.BAD_REQUEST);
             }
 
-            if (updatedJobOrder.getRepetition().equals("0") || updatedJobOrder.getRepetition().isEmpty()) {
-                updatedJobOrder.setRepetition("1");
-            }
+        // --- Parse numeric string fields once, with a clear error if they're bad ---
+        final double height;
+        final double width;
+        final double repetition;
+        try {
+            height = parseRequiredDouble(updatedJobOrder.getHeight(), "height");
+            width = parseRequiredDouble(updatedJobOrder.getWidth(), "width");
+            repetition = parseRequiredDouble(updatedJobOrder.getRepetition(), "repetition");
+        } catch (NumberFormatException nfe) {
+            logger.warn("Invalid numeric field on job order {}: {}", id, nfe.getMessage());
+            return errorResponse(updatedJobOrder, "Invalid numeric value: " + nfe.getMessage(), HttpStatus.BAD_REQUEST);
+        }
 
-            double total;
+        double total = calculateTotal(updatedJobOrder.getUnit(), height, width, updatedJobOrder.getMainQuantity(), repetition);
+
+        Pand pand = pandsService.getPandByPandCode(updatedJobOrder.getPandCode(), updatedJobOrder.getProjectProfileId());
+
+        copyBaseFields(pandsToJobOrder, updatedJobOrder);
+
+        boolean quantityFieldsChanged =
+                !Objects.equals(pandsToJobOrder.getHeight(), updatedJobOrder.getHeight())
+                        || !Objects.equals(pandsToJobOrder.getWidth(), updatedJobOrder.getWidth())
+                        || !Objects.equals(pandsToJobOrder.getRepetition(), updatedJobOrder.getRepetition())
+                        || pandsToJobOrder.getMainQuantity() != updatedJobOrder.getMainQuantity();
+
+        if (quantityFieldsChanged) {
             DecimalFormat df = new DecimalFormat("#.###");
+            double oldMainTotal = parseRequiredDouble(pandsToJobOrder.getMainTotal(), "mainTotal");
 
-            Pand pand = pandsService.getPandByPandCode(updatedJobOrder.getPandCode(), updatedJobOrder.getProjectProfileId());
-            if (updatedJobOrder.getUnit().equals("متر مربع")) {
-                total = (Double.parseDouble(updatedJobOrder.getHeight()) * Double.parseDouble(updatedJobOrder.getWidth()) * (updatedJobOrder.getMainQuantity() * Double.parseDouble(updatedJobOrder.getRepetition()))) / 10000;
-            } else if (updatedJobOrder.getUnit().equals("متر طولى")) {
-                total = (Double.parseDouble(updatedJobOrder.getHeight()) * (updatedJobOrder.getMainQuantity() * Double.parseDouble(updatedJobOrder.getRepetition()))) / 100;
-            } else {
-                total = updatedJobOrder.getMainQuantity() * Double.parseDouble(updatedJobOrder.getRepetition());
+            double quantityInBand = pand.getRestQuantity() - total;
+            if (quantityInBand < 0) {
+                return errorResponse(pandsToJobOrder,
+                        " الكمية المطلوبة اعلى من الكمية المتبقية فى البند " + pand.getPandCode(),
+                        HttpStatus.BAD_REQUEST);
             }
 
+            // Adjust the pand's remaining quantity by the delta between old and new totals
+            double delta = oldMainTotal - total; // positive => quantity freed up, negative => quantity consumed
+            pand.setRestQuantity(Double.parseDouble(df.format(pand.getRestQuantity() + delta)));
+
+            pandsToJobOrder.setTotal(df.format(total));
+            pandsToJobOrder.setMainTotal(df.format(total));
+            pandsToJobOrder.setQuantityInPand(Double.parseDouble(df.format(pand.getRestQuantity() - total)));
+            pandsToJobOrder.setQuantity(updatedJobOrder.getMainQuantity() * repetition);
+            pandsToJobOrder.setMainQuantity(updatedJobOrder.getMainQuantity());
+        }
+
+        if (!Objects.equals(pandsToJobOrder.getInstallationArea(), updatedJobOrder.getInstallationArea())) {
+            pandsToJobOrder.setInstallationArea(updatedJobOrder.getInstallationArea());
+            fatherJobOrder.setInstallementArea(updatedJobOrder.getInstallationArea());
+            jobOrderRepository.save(fatherJobOrder);
+        }
+
+        pandsToJobOrder.setHeight(updatedJobOrder.getHeight());
+        pandsToJobOrder.setWidth(updatedJobOrder.getWidth());
+        pandsToJobOrder.setRepetition(updatedJobOrder.getRepetition());
+
+        // Single save now (removed the duplicate call that existed before this refactor)
+        pandsRepository.save(pand);
+
+        pandsToJobOrder.setMessage(" الكميةالمتبقية فى البند " + pand.getRestQuantity());
+        pandsToJobOrderRepository.save(pandsToJobOrder);
+
+        changeHistoryLog.saveChange(id.toString(), updatedJobOrder.toString(), pandsToJobOrder.toString(), "update", request);
+
+        return new ResponseEntity<>(pandsToJobOrder, HttpStatus.OK);
+    }
+
+    // --- helpers -------------------------------------------------------------
+
+    private double parseRequiredDouble(String value, String fieldName) {
+        if (value == null || value.isBlank()) {
+            throw new NumberFormatException(fieldName + " is missing");
+        }
+        try {
+            return Double.parseDouble(value);
+        } catch (NumberFormatException e) {
+            throw new NumberFormatException(fieldName + " is not a valid number: '" + value + "'");
+        }
+    }
+
+    private double calculateTotal(String unit, double height, double width, double mainQuantity, double repetition) {
+        return switch (unit) {
+            case "متر مربع" -> (height * width * (mainQuantity * repetition)) / 10000;
+            case "متر طولى" -> (height * (mainQuantity * repetition)) / 100;
+            default -> mainQuantity * repetition;
+        };
+    }
+
+    private void copyBaseFields(PandsToJobOrder target, PandsToJobOrder source) {
+        target.setProjectCode(source.getProjectCode());
+        target.setProjectName(source.getProjectName());
+        target.setEngineerName(source.getEngineerName());
+        target.setJobOrderType(source.getJobOrderType());
+        target.setManufacturingCode(source.getManufacturingCode());
+        target.setPandCode(source.getPandCode());
+        target.setDescription(source.getDescription());
+        target.setManufacturing(source.getManufacturing());
+        target.setRawType(source.getRawType());
+        target.setRawUsed(source.getRawUsed());
+        target.setFinishType(source.getFinishType());
+        target.setThickness(source.getThickness());
+        target.setBlockNumber(source.getBlockNumber());
+        target.setFloor(source.getFloor());
+        target.setUnit(source.getUnit());
+        target.setAdditionalDescription(source.getAdditionalDescription());
+    }
+
+    private ResponseEntity<PandsToJobOrder> errorResponse(PandsToJobOrder entity, String message, HttpStatus status) {
+        entity.setFlag(FLAG_ERROR);
+        entity.setMessage(message);
+        return new ResponseEntity<>(entity, status);
+    }
+
+
+//    public ResponseEntity<PandsToJobOrder> updateJobOrder(Long id, PandsToJobOrder updatedJobOrder, int flag, HttpServletRequest request) {
+//
+//        try {
+//            PandsToJobOrder jobOrder = pandsToJobOrderRepository.findById(id)
+//                    .orElseThrow(() -> new ResourceNotFoundException("rawType Not Found for ID: " + id));
+//
+//            List<ExitJobOrder> exitJobOrders = exitJobOrderRepository.getByJobOrderId(jobOrder.getJobOrderId());
+//            if (!exitJobOrders.isEmpty()) {
+//                jobOrder.setFlag(1);
+//                jobOrder.setMessage(" غير مسموح بالتعديل .. تم صرف أذونات لأمر الشغل " + jobOrder.getJobOrderId());
+//                return new ResponseEntity<>(jobOrder, HttpStatus.BAD_REQUEST);
+//            }
+//
+//            if (updatedJobOrder.getRepetition().equals("0") || updatedJobOrder.getRepetition().isEmpty()) {
+//                updatedJobOrder.setRepetition("1");
+//            }
+//
+//            double total;
+//            DecimalFormat df = new DecimalFormat("#.###");
+//
+//            Pand pand = pandsService.getPandByPandCode(updatedJobOrder.getPandCode(), updatedJobOrder.getProjectProfileId());
+//            if (updatedJobOrder.getUnit().equals("متر مربع")) {
+//                total = (Double.parseDouble(updatedJobOrder.getHeight()) * Double.parseDouble(updatedJobOrder.getWidth()) * (updatedJobOrder.getMainQuantity() * Double.parseDouble(updatedJobOrder.getRepetition()))) / 10000;
+//            } else if (updatedJobOrder.getUnit().equals("متر طولى")) {
+//                total = (Double.parseDouble(updatedJobOrder.getHeight()) * (updatedJobOrder.getMainQuantity() * Double.parseDouble(updatedJobOrder.getRepetition()))) / 100;
+//            } else {
+//                total = updatedJobOrder.getMainQuantity() * Double.parseDouble(updatedJobOrder.getRepetition());
+//            }
+//
 //            if (jobOrder.getMainQuantity() != updatedJobOrder.getMainQuantity()) {
 //                double quantityInPand = pand.getRestQuantity() + updatedJobOrder.getQuantity();
 //                if (total > quantityInPand) {
@@ -236,94 +375,81 @@ public class PandsToJobOrderService {
 //                pand.setRestQuantity(Double.valueOf(df.format(pand.getRestQuantity() + jobOrder.getQuantity())));
 //                pandsRepository.save(pand);
 //            }
-
-            jobOrder.setProjectCode(updatedJobOrder.getProjectCode());
-            jobOrder.setProjectName(updatedJobOrder.getProjectName());
-            jobOrder.setEngineerName(updatedJobOrder.getEngineerName());
-            jobOrder.setJobOrderType(updatedJobOrder.getJobOrderType());
-            jobOrder.setManufacturingCode(updatedJobOrder.getManufacturingCode());
-            jobOrder.setPandCode(updatedJobOrder.getPandCode());
-            jobOrder.setDescription(updatedJobOrder.getDescription());
-            jobOrder.setManufacturing(updatedJobOrder.getManufacturing());
-            jobOrder.setRawType(updatedJobOrder.getRawType());
-            jobOrder.setRawUsed(updatedJobOrder.getRawUsed());
-            jobOrder.setFinishType(updatedJobOrder.getFinishType());
-            jobOrder.setThickness(updatedJobOrder.getThickness());
-            jobOrder.setBlockNumber(updatedJobOrder.getBlockNumber());
-            jobOrder.setFloor(updatedJobOrder.getFloor());
-
-            jobOrder.setUnit(updatedJobOrder.getUnit());
-
-            jobOrder.setAdditionalDescription(updatedJobOrder.getAdditionalDescription());
-
-            JobOrder fatherJobOrder = jobOrderService.getByJobOrder(updatedJobOrder.getJobOrderId());
-            if (!jobOrder.getInstallationArea().equals(updatedJobOrder.getInstallationArea())) {
-                jobOrder.setInstallationArea(updatedJobOrder.getInstallationArea());
-
-                fatherJobOrder.setInstallementArea(updatedJobOrder.getInstallationArea());
-                jobOrderRepository.save(fatherJobOrder);
-            }
-            jobOrder.setHeight(updatedJobOrder.getHeight());
-            jobOrder.setWidth(updatedJobOrder.getWidth());
-            jobOrder.setRepetition(updatedJobOrder.getRepetition());
-//        } else {
-//            jobOrder.setQuantity(jobOrder.getQuantity());
-//        }
-
-            try {
-                if (total < Double.parseDouble(jobOrder.getMainTotal())) {
-                    double newVal = Double.parseDouble(jobOrder.getMainTotal()) - total;
-                    pand.setRestQuantity(Double.parseDouble(df.format(pand.getRestQuantity() + newVal)));
-                } else {
-                    double newVal = total - Double.parseDouble(jobOrder.getMainTotal());
-                    pand.setRestQuantity(Double.parseDouble(df.format(pand.getRestQuantity() - newVal)));
-                }
-                pandsRepository.save(pand);
-
-            } catch (Exception e) {
-                jobOrder.setFlag(1);
-                jobOrder.setMessage(" الكمية المطلوبة " + Double.parseDouble(df.format(total)) + '\n' +
-                        " الكمية المتبقيه فى البند " + pand.getRestQuantity());
-                return new ResponseEntity<>(jobOrder, HttpStatus.BAD_REQUEST);
-            }
-
-            if (!jobOrder.getHeight().equals(updatedJobOrder.getHeight())
-                    || !jobOrder.getWidth().equals(updatedJobOrder.getWidth())
-                    || !jobOrder.getRepetition().equals(updatedJobOrder.getRepetition())
-                    || jobOrder.getMainQuantity() != updatedJobOrder.getMainQuantity()
-            ) {
-                jobOrder.setTotal(df.format(total));
-                jobOrder.setMainTotal(df.format(total));
-
-
-//                if (Double.parseDouble(df.format(pand.getRestQuantity() - Double.parseDouble(df.format(total)))) < 0) {
-//                    jobOrder.setFlag(1);
-//                    jobOrder.setMessage(
-//                            "الكمية المطلوبة: " + df.format(total) + "<br>" +
-//                                    "الكمية المتبقية في البند: " + pand.getRestQuantity()
-//                    );
-//                    return new ResponseEntity<>(jobOrder, HttpStatus.BAD_REQUEST);
+//
+//            jobOrder.setProjectCode(updatedJobOrder.getProjectCode());
+//            jobOrder.setProjectName(updatedJobOrder.getProjectName());
+//            jobOrder.setEngineerName(updatedJobOrder.getEngineerName());
+//            jobOrder.setJobOrderType(updatedJobOrder.getJobOrderType());
+//            jobOrder.setManufacturingCode(updatedJobOrder.getManufacturingCode());
+//            jobOrder.setPandCode(updatedJobOrder.getPandCode());
+//            jobOrder.setDescription(updatedJobOrder.getDescription());
+//            jobOrder.setManufacturing(updatedJobOrder.getManufacturing());
+//            jobOrder.setRawType(updatedJobOrder.getRawType());
+//            jobOrder.setRawUsed(updatedJobOrder.getRawUsed());
+//            jobOrder.setFinishType(updatedJobOrder.getFinishType());
+//            jobOrder.setThickness(updatedJobOrder.getThickness());
+//            jobOrder.setBlockNumber(updatedJobOrder.getBlockNumber());
+//            jobOrder.setFloor(updatedJobOrder.getFloor());
+//
+//            jobOrder.setUnit(updatedJobOrder.getUnit());
+//
+//            jobOrder.setAdditionalDescription(updatedJobOrder.getAdditionalDescription());
+//
+//            JobOrder fatherJobOrder = jobOrderService.getByJobOrder(updatedJobOrder.getJobOrderId());
+//            if (!jobOrder.getInstallationArea().equals(updatedJobOrder.getInstallationArea())) {
+//                jobOrder.setInstallationArea(updatedJobOrder.getInstallationArea());
+//
+//                fatherJobOrder.setInstallementArea(updatedJobOrder.getInstallationArea());
+//                jobOrderRepository.save(fatherJobOrder);
+//            }
+//            jobOrder.setHeight(updatedJobOrder.getHeight());
+//            jobOrder.setWidth(updatedJobOrder.getWidth());
+//            jobOrder.setRepetition(updatedJobOrder.getRepetition());
+////        } else {
+////            jobOrder.setQuantity(jobOrder.getQuantity());
+////        }
+//
+//            try {
+//                if (total < Double.parseDouble(jobOrder.getMainTotal())) {
+//                    double newVal = Double.parseDouble(jobOrder.getMainTotal()) - total;
+//                    pand.setRestQuantity(Double.parseDouble(df.format(pand.getRestQuantity() + newVal)));
 //                } else {
-//                    jobOrder.setQuantityInPand(Double.parseDouble(df.format(pand.getRestQuantity() - Double.parseDouble(df.format(total)))));
+//                    double newVal = total - Double.parseDouble(jobOrder.getMainTotal());
+//                    pand.setRestQuantity(Double.parseDouble(df.format(pand.getRestQuantity() - newVal)));
 //                }
-
-
-                jobOrder.setQuantity(updatedJobOrder.getMainQuantity() * Double.parseDouble(updatedJobOrder.getRepetition()));
-                jobOrder.setMainQuantity(updatedJobOrder.getMainQuantity());
-
-            }
-
-
-            jobOrder.setMessage(" الكميةالمتبقية فى البند " + pand.getRestQuantity());
-            pandsToJobOrderRepository.save(jobOrder);
-            changeHistoryLog.saveChange(id.toString(), updatedJobOrder.toString(), jobOrder.toString(), "update", request);
-
-            return new ResponseEntity<>(jobOrder, HttpStatus.OK);
-        } catch (Exception e) {
-            e.printStackTrace();
-            return new ResponseEntity<>(null, HttpStatus.OK);
-        }
-    }
+//                pandsRepository.save(pand);
+//
+//            } catch (Exception e) {
+//                jobOrder.setFlag(1);
+//                jobOrder.setMessage(" الكمية المطلوبة " + Double.parseDouble(df.format(total)) + '\n' +
+//                        " الكمية المتبقيه فى البند " + pand.getRestQuantity());
+//                return new ResponseEntity<>(jobOrder, HttpStatus.BAD_REQUEST);
+//            }
+//
+//            if (!jobOrder.getHeight().equals(updatedJobOrder.getHeight())
+//                    || !jobOrder.getWidth().equals(updatedJobOrder.getWidth())
+//                    || !jobOrder.getRepetition().equals(updatedJobOrder.getRepetition())
+//                    || jobOrder.getMainQuantity() != updatedJobOrder.getMainQuantity()
+//            ) {
+//                jobOrder.setTotal(df.format(total));
+//                jobOrder.setMainTotal(df.format(total));
+//
+//                jobOrder.setQuantity(updatedJobOrder.getMainQuantity() * Double.parseDouble(updatedJobOrder.getRepetition()));
+//                jobOrder.setMainQuantity(updatedJobOrder.getMainQuantity());
+//
+//            }
+//
+//
+//            jobOrder.setMessage(" الكميةالمتبقية فى البند " + pand.getRestQuantity());
+//            pandsToJobOrderRepository.save(jobOrder);
+//            changeHistoryLog.saveChange(id.toString(), updatedJobOrder.toString(), jobOrder.toString(), "update", request);
+//
+//            return new ResponseEntity<>(jobOrder, HttpStatus.OK);
+//        } catch (Exception e) {
+//            e.printStackTrace();
+//            return new ResponseEntity<>(null, HttpStatus.OK);
+//        }
+//    }
 
     public List<PandsToJobOrder> getByJobOrderId(String id) {
 
@@ -333,9 +459,9 @@ public class PandsToJobOrderService {
     public List<PandsToJobOrder> getByJobOrderIdWzNoZeros(UnifiedSerial unifiedSerial) {
         List<PandsToJobOrder> pandsToJobOrders = pandsToJobOrderRepository.getByJobOrderId(unifiedSerial.getJobOrderNumber());
         List<PandsToJobOrder> pandsToJobOrdersNoZeros = new ArrayList<>();
-        for (int i = 0; i < pandsToJobOrders.size(); i++) {
-            if (pandsToJobOrders.get(i).getQuantity() > 0) {
-                pandsToJobOrdersNoZeros.add(pandsToJobOrders.get(i));
+        for (PandsToJobOrder pandsToJobOrder : pandsToJobOrders) {
+            if (pandsToJobOrder.getQuantity() > 0) {
+                pandsToJobOrdersNoZeros.add(pandsToJobOrder);
             }
         }
         return pandsToJobOrdersNoZeros;
@@ -378,7 +504,7 @@ public class PandsToJobOrderService {
         double total;
         DecimalFormat df = new DecimalFormat("#.###");
         Pand pand = pandsService.getPandByPandCode(pandsToJobOrder.getPandCode(), pandsToJobOrder.getProjectProfileId());
-        pand.setRestQuantity(Double.valueOf(df.format(pand.getRestQuantity() + Double.valueOf(pandsToJobOrder.getTotal()))));
+        pand.setRestQuantity(Double.parseDouble(df.format(pand.getRestQuantity() + Double.parseDouble(pandsToJobOrder.getTotal()))));
 
         pandsToJobOrderRepository.deleteFromMutuleTable(id);
         pandsRepository.save(pand);
@@ -900,52 +1026,52 @@ public class PandsToJobOrderService {
 
         List<PandsToJobOrder> pandsToJobOrdersByRawType = new ArrayList<>();
 
-        for (int i = 0; i < pandsToJobOrdersRaws.size(); i++) {
-            pandsToJobOrdersByRawType.addAll(pandsToJobOrderRepository.getByThicknessAndRawType(pandsToJobOrdersRaws.get(i).getProjectProfileId()
-                    , pandsToJobOrdersRaws.get(i).getJobOrderId(),
-                    pandsToJobOrdersRaws.get(i).getRawType()));
+        for (PandsToJobOrder pandsToJobOrdersRaw : pandsToJobOrdersRaws) {
+            pandsToJobOrdersByRawType.addAll(pandsToJobOrderRepository.getByThicknessAndRawType(pandsToJobOrdersRaw.getProjectProfileId()
+                    , pandsToJobOrdersRaw.getJobOrderId(),
+                    pandsToJobOrdersRaw.getRawType()));
         }
 
         rowIdx += 1;
-        for (int i = 0; i < pandsToJobOrdersByRawType.size(); i++) {
+        for (PandsToJobOrder toJobOrder : pandsToJobOrdersByRawType) {
 
-            sheet.getCells().get("G" + rowIdx).putValue(pandsToJobOrdersByRawType.get(i).getRawType());
+            sheet.getCells().get("G" + rowIdx).putValue(toJobOrder.getRawType());
             if (rowIdx % 2 != 0) {
                 sheet.getCells().get("G" + rowIdx).setStyle(shadowStyle);
             } else {
                 sheet.getCells().get("G" + rowIdx).setStyle(discriptionDataStyle);
             }
 
-            sheet.getCells().get("H" + rowIdx).putValue(pandsToJobOrdersByRawType.get(i).getThickness());
+            sheet.getCells().get("H" + rowIdx).putValue(toJobOrder.getThickness());
             if (rowIdx % 2 != 0) {
                 sheet.getCells().get("H" + rowIdx).setStyle(shadowStyle);
             } else {
                 sheet.getCells().get("H" + rowIdx).setStyle(discriptionDataStyle);
             }
 
-            sheet.getCells().get("I" + rowIdx).putValue(pandsToJobOrdersByRawType.get(i).getUnit());
+            sheet.getCells().get("I" + rowIdx).putValue(toJobOrder.getUnit());
             if (rowIdx % 2 != 0) {
                 sheet.getCells().get("I" + rowIdx).setStyle(shadowStyle);
             } else {
                 sheet.getCells().get("I" + rowIdx).setStyle(discriptionDataStyle);
             }
 
-            List<PandsToJobOrder> getByThicknessAndRawTypeAndUnit = pandsToJobOrderRepository.getByThicknessAndRawTypeAndUnit(pandsToJobOrdersRaws.get(0).getProjectProfileId()
-                    , pandsToJobOrdersRaws.get(0).getJobOrderId(),
-                    pandsToJobOrdersByRawType.get(i).getRawType(),
-                    pandsToJobOrdersByRawType.get(i).getThickness(),
-                    pandsToJobOrdersByRawType.get(i).getUnit());
+            List<PandsToJobOrder> getByThicknessAndRawTypeAndUnit = pandsToJobOrderRepository.getByThicknessAndRawTypeAndUnit(pandsToJobOrdersRaws.getFirst().getProjectProfileId()
+                    , pandsToJobOrdersRaws.getFirst().getJobOrderId(),
+                    toJobOrder.getRawType(),
+                    toJobOrder.getThickness(),
+                    toJobOrder.getUnit());
 
             Double totalQuantityInCube = 0.0;
             Double totalSum = 0.0;
 
-            if (getByThicknessAndRawTypeAndUnit.size() > 0) {
-                for (int k = 0; k < getByThicknessAndRawTypeAndUnit.size(); k++) {
-                    totalSum += Double.valueOf(getByThicknessAndRawTypeAndUnit.get(k).getMainTotal());
-                    totalQuantityInCube += (getByThicknessAndRawTypeAndUnit.get(k).getMainQuantity() *
-                            Double.valueOf(getByThicknessAndRawTypeAndUnit.get(k).getRepetition()) *
-                            Double.valueOf(getByThicknessAndRawTypeAndUnit.get(k).getHeight()) *
-                            Double.valueOf(getByThicknessAndRawTypeAndUnit.get(k).getWidth())) / 10000;
+            if (!getByThicknessAndRawTypeAndUnit.isEmpty()) {
+                for (PandsToJobOrder pandsToJobOrder : getByThicknessAndRawTypeAndUnit) {
+                    totalSum += Double.parseDouble(pandsToJobOrder.getMainTotal());
+                    totalQuantityInCube += (pandsToJobOrder.getMainQuantity() *
+                            Double.parseDouble(pandsToJobOrder.getRepetition()) *
+                            Double.parseDouble(pandsToJobOrder.getHeight()) *
+                            Double.parseDouble(pandsToJobOrder.getWidth())) / 10000;
                 }
             }
 
@@ -1064,7 +1190,7 @@ public class PandsToJobOrderService {
         sheet.getCells().get("A3").putValue("نوع");
         sheet.getCells().get("A3").setStyle(discriptionDataStyle);
 
-        sheet.getCells().get("B3").putValue(pandsToJobOrdersPreview.get(0).getJobOrderType());
+        sheet.getCells().get("B3").putValue(pandsToJobOrdersPreview.getFirst().getJobOrderType());
         sheet.getCells().get("B3").setStyle(discriptionDataStyle);
 
 
@@ -1073,25 +1199,25 @@ public class PandsToJobOrderService {
 
 //        sheet.getCells().merge(0, 4, 1, 5);  // (startRow, startColumn, totalRows, totalColumns)
 
-        sheet.getCells().get("E1").putValue(pandsToJobOrdersPreview.get(0).getInstallationArea());
+        sheet.getCells().get("E1").putValue(pandsToJobOrdersPreview.getFirst().getInstallationArea());
         sheet.getCells().get("E1").setStyle(discriptionDataStyle);
 
         sheet.getCells().get("D3").putValue("الدور");
         sheet.getCells().get("D3").setStyle(discriptionDataStyle);
 
-        sheet.getCells().get("E3").putValue(pandsToJobOrdersPreview.get(0).getFloor());
+        sheet.getCells().get("E3").putValue(pandsToJobOrdersPreview.getFirst().getFloor());
         sheet.getCells().get("E3").setStyle(discriptionDataStyle);
 
         sheet.getCells().get("D5").putValue("البلوك");
         sheet.getCells().get("D5").setStyle(discriptionDataStyle);
 
-        sheet.getCells().get("E5").putValue(pandsToJobOrdersPreview.get(0).getBlockNumber());
+        sheet.getCells().get("E5").putValue(pandsToJobOrdersPreview.getFirst().getBlockNumber());
         sheet.getCells().get("E5").setStyle(discriptionDataStyle);
 
         sheet.getCells().get("F1").putValue("أسم المشروع");
         sheet.getCells().get("F1").setStyle(discriptionDataStyle);
 
-        sheet.getCells().get("G1").putValue(pandsToJobOrdersPreview.get(0).getProjectName());
+        sheet.getCells().get("G1").putValue(pandsToJobOrdersPreview.getFirst().getProjectName());
         sheet.getCells().get("G1").setStyle(discriptionDataStyle);
 
         sheet.getCells().get("F3").putValue("كود المشروع");
@@ -1099,7 +1225,7 @@ public class PandsToJobOrderService {
 
 //        sheet.getCells().merge(2, 6, 1, 2);  // (startRow, startColumn, totalRows, totalColumns)
 
-        sheet.getCells().get("G3").putValue(pandsToJobOrdersPreview.get(0).getProjectCode());
+        sheet.getCells().get("G3").putValue(pandsToJobOrdersPreview.getFirst().getProjectCode());
         sheet.getCells().get("G3").setStyle(discriptionDataStyle);
 
         sheet.getCells().get("F5").putValue("أسم المهندس");
@@ -1107,7 +1233,7 @@ public class PandsToJobOrderService {
 
 //        sheet.getCells().merge(4, 6, 1, 2);  // (startRow, startColumn, totalRows, totalColumns)
 
-        sheet.getCells().get("G5").putValue(pandsToJobOrdersPreview.get(0).getOfficerName());
+        sheet.getCells().get("G5").putValue(pandsToJobOrdersPreview.getFirst().getOfficerName());
         sheet.getCells().get("G5").setStyle(discriptionDataStyle);
 
 //        sheet.getCells().get("F7").putValue("أسم المستخدم");
@@ -1456,8 +1582,6 @@ public class PandsToJobOrderService {
 
     private List<PandsToJobOrder> mapTopandsToJobOrder(List<MarbleItemDto> marbleItemDtos) {
 
-            double totalQuantity = 0;
-
             List<String> distinctPands = marbleItemDtos.stream()
                     .map(MarbleItemDto::getPandCode)   // extract the unit field
                     .filter(Objects::nonNull)      // optional: skip null units
@@ -1465,7 +1589,9 @@ public class PandsToJobOrderService {
                     .toList();
 
         for (String distinctPand : distinctPands) {
+            double totalQuantity = 0;
             double restQuantity = pandsRepository.findRestQuantityByPandCodeAndProjectProfileId(distinctPand, marbleItemDtos.getFirst().getProjectProfileId());
+            totalQuantity = 0;
             for (MarbleItemDto marbleItemDto : marbleItemDtos) {
                 if (marbleItemDto.getPandCode().equals(distinctPand)) {
                     totalQuantity += marbleItemDto.getTotal();
@@ -1482,19 +1608,6 @@ public class PandsToJobOrderService {
             }
         }
         DecimalFormat df = new DecimalFormat("#.###");
-        for (String distinctPand : distinctPands) {
-            totalQuantity = 0;
-            double restQuantity = pandsRepository.findRestQuantityByPandCodeAndProjectProfileId(distinctPand, marbleItemDtos.getFirst().getProjectProfileId());
-            for (MarbleItemDto marbleItemDto : marbleItemDtos) {
-                if (marbleItemDto.getPandCode().equals(distinctPand)) {
-                    totalQuantity += Double.parseDouble(String.valueOf(marbleItemDto.getTotal()));
-                }
-            }
-            Pand pand = pandsService.getPandByPandCode(distinctPand, marbleItemDtos.getFirst().getProjectProfileId());
-
-            pand.setRestQuantity(Double.parseDouble(df.format(restQuantity - totalQuantity)));
-            pandsRepository.save(pand);
-        }
 
         List<PandsToJobOrder> pandsToJobOrderList = new ArrayList<>();
 
@@ -1503,7 +1616,8 @@ public class PandsToJobOrderService {
                 new SimpleDateFormat("hh:mm:ss a");
         Integer number = jobOrderService.getTheMaxNumber(marbleItemDtos.getFirst().getProjectProfileId());
         GregorianCalendar gcalendar = new GregorianCalendar();
-        int nextNumber = number + 1;
+        int nextNumber = (number != null ? number : 0) + 1;
+
 
         double restTotal;
 
@@ -1553,8 +1667,8 @@ public class PandsToJobOrderService {
             pandsToJobOrder.setFinishType(pand.getFinishType());
             pandsToJobOrder.setRawType(pand.getRawType());
             pandsToJobOrder.setRawUsed(pand.getRawUsed());
-//            pandsToJobOrder.setBlockNumber(pandsToJobOrderList.getFirst().getBlockNumber());
-//            pandsToJobOrder.setFloor(pandsToJobOrderList.getFirst().getFloor());
+            pandsToJobOrder.setBlockNumber(marbleItemDtos.getFirst().getBlock());
+            pandsToJobOrder.setFloor(marbleItemDtos.getFirst().getFloor());
             pandsToJobOrder.setJobOrderType(marbleItemDtos.getFirst().getJobOrderTybe());
             pandsToJobOrder.setEngineerName(marbleItemDtos.getFirst().getEngineerName());
             pandsToJobOrder.setInstallationArea(marbleItemDtos.getFirst().getInstallationArea());
@@ -1564,6 +1678,21 @@ public class PandsToJobOrderService {
 //            pandsToJobOrderRepository.save(pandsToJobOrder);
 
         }
+
+        for (String distinctPand : distinctPands) {
+            double totalQuantity = 0;
+            double restQuantity = pandsRepository.findRestQuantityByPandCodeAndProjectProfileId(distinctPand, marbleItemDtos.getFirst().getProjectProfileId());
+            for (MarbleItemDto marbleItemDto : marbleItemDtos) {
+                if (marbleItemDto.getPandCode().equals(distinctPand)) {
+                    totalQuantity += Double.parseDouble(String.valueOf(marbleItemDto.getTotal()));
+                }
+            }
+            Pand pand = pandsService.getPandByPandCode(distinctPand, marbleItemDtos.getFirst().getProjectProfileId());
+
+            pand.setRestQuantity(Double.parseDouble(df.format(restQuantity - totalQuantity)));
+            pandsRepository.save(pand);
+        }
+
         return pandsToJobOrderList;
     }
 

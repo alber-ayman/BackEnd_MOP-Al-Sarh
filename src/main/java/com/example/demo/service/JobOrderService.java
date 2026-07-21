@@ -353,17 +353,6 @@ public class JobOrderService {
             tableHeaderStyle.setBorder(BorderType.LEFT_BORDER, CellBorderType.THIN, com.aspose.cells.Color.getBlack());
             tableHeaderStyle.setBorder(BorderType.RIGHT_BORDER, CellBorderType.THIN, com.aspose.cells.Color.getBlack());
 
-//            Style tableHeaderStyle2 = sheet.getCells().get("C1").getStyle();
-//            tableHeaderStyle2.setHorizontalAlignment(TextAlignmentType.CENTER);
-//            tableHeaderStyle2.setVerticalAlignment(TextAlignmentType.CENTER);
-//            tableHeaderStyle2.getFont().setItalic(true);
-//            tableHeaderStyle2.getFont().setSize(9);
-//            tableHeaderStyle2.getFont().setBold(false);
-//            tableHeaderStyle2.setBorder(BorderType.TOP_BORDER, CellBorderType.THIN, com.aspose.cells.Color.getBlack());
-//            tableHeaderStyle2.setBorder(BorderType.BOTTOM_BORDER, CellBorderType.THIN, com.aspose.cells.Color.getBlack());
-//            tableHeaderStyle2.setBorder(BorderType.LEFT_BORDER, CellBorderType.THIN, com.aspose.cells.Color.getBlack());
-//            tableHeaderStyle2.setBorder(BorderType.RIGHT_BORDER, CellBorderType.THIN, com.aspose.cells.Color.getBlack());
-
 
             Style discriptionDataStyle = sheet.getCells().get("F3").getStyle();
             discriptionDataStyle.setHorizontalAlignment(TextAlignmentType.CENTER);
@@ -457,9 +446,11 @@ public class JobOrderService {
 
                 if (totalSumInJobOrders == null) {
                     totalSumInJobOrders = 0.0;
+                }else{
+                    totalSumInJobOrders = totalSumInJobOrders * Integer.parseInt(entry.getRepetition());
                 }
 
-                totalQuantityInJobOrders += Double.valueOf(totalSumInJobOrders);
+                totalQuantityInJobOrders += totalSumInJobOrders;
 
                 sheet.getCells().get("B" + rowIdx).putValue(totalSumInJobOrders); // الكميه لكل امر شغل
                 if (rowIdx % 2 != 0) {
@@ -473,10 +464,11 @@ public class JobOrderService {
                 if (totalExit == null) {
                     totalExit = 0.0;
                 }
+
                 totalQuantityInExitJobOrders += totalExit;
 //                DecimalFormat df = new DecimalFormat("#.###");
 //                String formattedNumber = df.format(totalExit);
-                sheet.getCells().get("C" + rowIdx).putValue(totalExit); // الكميه المصروفه
+                sheet.getCells().get("C" + rowIdx).putValue((totalExit)); // الكميه المصروفه
                 if (rowIdx % 2 != 0) {
                     sheet.getCells().get("C" + rowIdx).setStyle(shadowStyle);
                 } else {

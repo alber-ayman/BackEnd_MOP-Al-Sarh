@@ -119,16 +119,16 @@ public class PandsService {
 
 
             if (pand.getUnit().equals("متر مربع")) {
-                total = (Double.valueOf(height) * Double.valueOf(width) * Double.valueOf(pand.getMainQuantity())) / 10000;
+                total = (Double.parseDouble(height) * Double.parseDouble(width) * pand.getMainQuantity()) / 10000;
             } else if (pand.getUnit().equals("متر طولى")) {
-                total = (Double.valueOf(height) * Double.valueOf(pand.getMainQuantity())) / 100;
+                total = (Double.parseDouble(height) * pand.getMainQuantity()) / 100;
             } else {
-                total = Double.valueOf(pand.getMainQuantity());
+                total = pand.getMainQuantity();
             }
 //            Number number = format.parse(String.valueOf(total));
 //            double value = number.doubleValue();
             String formattedNumber = df.format(total);
-            pand.setTotal(Double.valueOf(formattedNumber));
+            pand.setTotal(Double.parseDouble(formattedNumber));
             pand.setProjectProfileId(projectProfile.getId());
             pand.setRestQuantity(pand.getMainQuantity()); // restQuantity
             pand.setTotalQuantity(pand.getMainQuantity());
@@ -165,11 +165,6 @@ public class PandsService {
         try {
 
             String requestMessage = pand.toString();
-            if (pand == null) {
-                Exception e = new Exception();
-                e.printStackTrace();
-                return pand.get();
-            }
             DecimalFormat df = new DecimalFormat("#.###");
 
 
@@ -200,11 +195,11 @@ public class PandsService {
             double total;
 
             if (updatedPand.getUnit().equals("متر مربع")) {
-                total = (Double.valueOf(height) * Double.valueOf(width) * Double.valueOf(updatedPand.getMainQuantity())) / 10000;
+                total = (Double.parseDouble(height) * Double.parseDouble(width) * updatedPand.getMainQuantity()) / 10000;
             } else if (updatedPand.getUnit().equals("متر طولى")) {
-                total = (Double.valueOf(height) * Double.valueOf(updatedPand.getMainQuantity())) / 100;
+                total = (Double.parseDouble(height) * updatedPand.getMainQuantity()) / 100;
             } else {
-                total = Double.valueOf(updatedPand.getMainQuantity());
+                total = updatedPand.getMainQuantity();
             }
 
 //            String formattedNumber = df.format(total);
@@ -214,7 +209,7 @@ public class PandsService {
                 Date dNow = new Date();
                 SimpleDateFormat ft =
                         new SimpleDateFormat("hh:mm:ss a");
-                mainQuantity = Double.valueOf(df.format(pand.get().getTotalQuantity() + updatedPand.getAdditionalQuantity()));
+                mainQuantity = Double.parseDouble(df.format(pand.get().getTotalQuantity() + updatedPand.getAdditionalQuantity()));
                 pand.get().setTotalQuantity(mainQuantity);
                 pand.get().setAdditionalQuantityDate(formattedDate);
                 pand.get().setAdditionalQuantity(pand.get().getAdditionalQuantity() + updatedPand.getAdditionalQuantity());
@@ -222,31 +217,6 @@ public class PandsService {
                 pand.get().setAdditionalBy(updatedPand.getAdditionalBy());
 
                 pand.get().setRestQuantity(Double.parseDouble(df.format(pand.get().getRestQuantity() + updatedPand.getAdditionalQuantity())));
-
-//                List<PandsToJobOrder> pandsToJobOrders = pandsToJobOrderRepository.findByPandCodeAndProjectCode(pand.get().getPandCode(), pand.get().getProjectCode());
-
-                //                double total = 0.0;
-
-//                for (int i = 0; i < pandsToJobOrders.size(); i++) {
-//                    total += Double.valueOf(pandsToJobOrders.get(i).getMainTotal());
-//                }
-
-//                if (mainQuantity - total >= 0) {
-//                    pand.get().setMainQuantity(updatedPand.getMainQuantity());
-
-//                    total = 0.0;
-//                    for (int i = 0; i < pandsToJobOrders.size(); i++) {
-//                        total += Double.valueOf(pandsToJobOrders.get(i).getMainTotal());
-//                        pandsToJobOrders.get(i).setQuantityInPand(mainQuantity - total);
-//                        pandsToJobOrderRepository.save(pandsToJobOrders.get(i));
-//                    }
-//                    String formattedNumber = df.format(mainQuantity - total);
-//                    pand.get().setRestQuantity(Double.valueOf(formattedNumber));
-//                } else {
-//                    pand.get().setFlag(1);
-//                    pand.get().setMessage(" الكمية المطلوبة أقل من الكمية المستخدمة فى أوامر الشغل ");
-//                    return pand.get();
-//                }
             }
 
             pand.get().setDescription(updatedPand.getDescription());
@@ -260,11 +230,6 @@ public class PandsService {
             pand.get().setHeight(height);
             pand.get().setWidth(width);
             pand.get().setRepetition(updatedPand.getRepetition());
-
-
-
-
-//            pand.ifPresent(oldPand -> pand.get().setTotal(Double.valueOf(formattedNumber)));
 
             String pandCode = updatedPand.getPandCode();
 
@@ -282,7 +247,6 @@ public class PandsService {
 
             List<PandsToJobOrder> pandsToJobOrders = pandsToJobOrderRepository.jobOrdersByPandCode(pand.get().getProjectProfileId(), pand.get().getPandCode());
             for (PandsToJobOrder pandsToJobOrder : pandsToJobOrders) {
-
                 pandsToJobOrder.setPandCode(pandCode);
                 pandsToJobOrder.setManufacturing(pand.get().getManufacturing());
                 pandsToJobOrder.setRawType(pand.get().getRawType());
@@ -555,9 +519,11 @@ public class PandsService {
 
                 if (totalSumInJobOrders == null) {
                     totalSumInJobOrders = 0.0;
+                }else{
+                    totalSumInJobOrders = totalSumInJobOrders * Integer.parseInt(entry.getRepetition());
                 }
 
-                totalQuantityInJobOrders += Double.valueOf(totalSumInJobOrders);
+                totalQuantityInJobOrders += totalSumInJobOrders;
 
                 sheet.getCells().get("B" + rowIdx).putValue(totalSumInJobOrders); // الكميه لكل امر شغل
                 if (rowIdx % 2 != 0) {
@@ -586,7 +552,7 @@ public class PandsService {
 
                 String tA = df.format(totalExit);
 
-                sheet.getCells().get("D" + rowIdx).putValue(Double.valueOf(rTA) - Double.valueOf(tA));
+                sheet.getCells().get("D" + rowIdx).putValue(Double.parseDouble(rTA) - Double.parseDouble(tA));
                 if (rowIdx % 2 != 0) {
                     sheet.getCells().get("D" + rowIdx).setStyle(shadowStyle);
                 } else {

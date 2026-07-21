@@ -5,6 +5,7 @@ import jakarta.transaction.Transactional;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.query.Procedure;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
@@ -32,7 +33,7 @@ public interface PandsToJobOrderRepository extends JpaRepository<PandsToJobOrder
     @Query(value = "select sum(main_total) from pands_to_job_order where project_profile_id = :projectCode and pand_code = :pandCode", nativeQuery = true)
     Double getSumByPandCode(@Param("projectCode") Long projectCode, @Param("pandCode") String pandCode);
 
-    @Query(value = "select sum(main_quantity) from pands_to_job_order where project_profile_id = :projectCode and job_order_id = :job_order_id and raw_type = :raw_type", nativeQuery = true)
+    @Query(value = "select sum(main_quantity * repetition) from pands_to_job_order where project_profile_id = :projectCode and job_order_id = :job_order_id and raw_type = :raw_type", nativeQuery = true)
     Double sumQuantityByRaw(@Param("projectCode") Long projectCode, @Param("job_order_id") String pandCode, @Param("raw_type") String rawType);
 
     @Query(value = "SELECT * FROM pands_to_job_order where project_profile_id = :projectCode and job_order_id = :job_order_id  group by raw_type", nativeQuery = true)
@@ -74,7 +75,7 @@ public interface PandsToJobOrderRepository extends JpaRepository<PandsToJobOrder
     @Query(value = "SELECT  * FROM mop.pands_to_job_order where project_profile_id = :projectCode and pand_code = :pandCode group by job_order_id" , nativeQuery = true)
     List<PandsToJobOrder> getPandDetails(@Param("projectCode") Long projectCode, @Param("pandCode") String pandCode);
 
-    @Query(value = "select sum(main_total) from pands_to_job_order where project_profile_id = :projectCode and pand_code = :pandCode and job_order_id = :job_order_id ", nativeQuery = true)
+    @Query(value = "select sum(main_quantity) from pands_to_job_order where project_profile_id = :projectCode and pand_code = :pandCode and job_order_id = :job_order_id ", nativeQuery = true)
     Double getSumByPandCodeAndJobOrder(@Param("projectCode") Long projectCode, @Param("pandCode") String pandCode , @Param("job_order_id") String job_order_id);
 
     @Query(value = "SELECT  * FROM mop.pands_to_job_order where project_profile_id = :projectCode and job_order_id = :job_order_id group by pand_code" , nativeQuery = true)
@@ -89,4 +90,10 @@ public interface PandsToJobOrderRepository extends JpaRepository<PandsToJobOrder
 
 
     void deleteByProjectProfileId(Long id);
+
+    @Procedure(procedureName = "deducting_quantity_from_pands")
+    void deductingQuantityFromPands(
+            @Param("p_project_code") String projectCode,
+            @Param("p_job_order_id") String jobOrderId
+    );
 }

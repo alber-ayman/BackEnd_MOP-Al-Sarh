@@ -163,7 +163,7 @@ public class pandsToJobOrderController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<PandsToJobOrder> updateJobOrders(@PathVariable(value = "id") Long id, @RequestBody PandsToJobOrder jobOrder,@PathVariable(value = "flag") int flag,HttpServletRequest request) throws ResourceNotFoundException, SQLException {
         try {
-            return pandsToJobOrderService.updateJobOrder(id,jobOrder,flag,request);
+            return pandsToJobOrderService.updateJobOrder(id,jobOrder,request);
         } catch (Exception e) {
             e.printStackTrace();
             return new ResponseEntity<>(jobOrder, HttpStatus.BAD_REQUEST);

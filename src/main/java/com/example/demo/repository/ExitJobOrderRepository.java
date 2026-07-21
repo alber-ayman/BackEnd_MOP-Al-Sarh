@@ -58,7 +58,7 @@ public interface ExitJobOrderRepository extends JpaRepository<ExitJobOrder, Long
 
     void deleteByProjectProfileId(Long id);
 
-    @Query(value = "select sum(total) from exit_job_order where project_code = :projectCode and pand_code = :pandCode and job_order_id = :job_order_id and return_flag != 1", nativeQuery = true)
+    @Query(value = "select sum(quantity) from exit_job_order where project_code = :projectCode and pand_code = :pandCode and job_order_id = :job_order_id and return_flag != 1", nativeQuery = true)
     Double getSumByJobOrderAndPand(@Param("projectCode") String projectCode, @Param("pandCode") String pandCode, @Param("job_order_id") String jobOrderId);
 
     List<ExitJobOrder> getByUnifiedSerial(String unifiedSerial);
@@ -68,4 +68,15 @@ public interface ExitJobOrderRepository extends JpaRepository<ExitJobOrder, Long
     @Query(value = "select * from exit_job_order where project_code = :projectCode and pand_code = :pandCode", nativeQuery = true)
     List<ExitJobOrder> getByProjectAndPandCode(@Param("projectCode") String projectCode, @Param("pandCode") String pandCode);
 
+    List<ExitJobOrder> findByProjectProfileId(Long projectProfileId);
+
+    @Query("""
+            SELECT DISTINCT e.serialNumber
+            FROM ExitJobOrder e
+            WHERE e.projectProfileId = :projectProfileId
+            ORDER BY e.serialNumber
+            """)
+    List<String> findDistinctSerialNumbersByProjectProfileId(
+            @Param("projectProfileId") Long projectProfileId
+    );
 }

@@ -101,8 +101,6 @@ public class ProjectProfileService {
             ProjectProfile project = projectProfileRepository.findById(id)
                     .orElseThrow(() -> new ResourceNotFoundException("project Not Found for ID: " + id));
 
-//            UserDetailsImpl userDetails = (UserDetailsImpl) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
-//            project.setUpdatedBy(userDetails.getUsername());
 
             LocalDateTime myDateObj = LocalDateTime.now();
             DateTimeFormatter myFormatObj = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
@@ -122,6 +120,11 @@ public class ProjectProfileService {
             project.setStartDate(updatedProject.getStartDate());
 
             ProjectProfile saved = projectProfileRepository.save(project);
+
+            projectProfileRepository.updatePandsAndJobOrders(saved.getId(),
+                    saved.getProjectCode(),
+                    saved.getProjectName());
+
             return saved;
         } catch (Exception e) {
             return null;
